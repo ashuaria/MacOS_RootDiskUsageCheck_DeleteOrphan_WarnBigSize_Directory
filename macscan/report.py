@@ -69,43 +69,48 @@ COLUMNS = [
 ]
 COLUMN_SEP = 2  # spaces between columns
 
+# Per-level indent for the TUI tree prefix (matches the CLI table).
+TREE_INDENT = 2
+
 
 def _is_dir(path):
     return os.path.isdir(path)
 
 
-def _tree_lines(node, prefix="", is_last=True, show_root=True):
+def _tree_lines(node, prefix="", is_last=True, show_root=True, indent=TREE_INDENT):
     """Yield (indent_prefix, node) tuples for a pretty-printed ASCII tree.
 
     `prefix` carries the vertical bars for ancestors; `is_last` controls
     whether this node gets `└──` (last child) or `├──` (has next sibling).
-    `show_root` is False when the root itself is omitted (rendered separately).
+    `indent` is the per-level indent in spaces (default 2) so each level
+    visibly steps to the right of its parent. `show_root` is False when
+    the root itself is omitted (rendered separately).
     """
     if show_root and not prefix:
         # The root is rendered at the call site; descendants get connectors.
         if node.children:
             yield ("", node)
-            child_prefix = ""
             last_idx = len(node.children) - 1
             for i, child in enumerate(node.children):
-                is_last_child = i == last_idx
-                connector = "└─" if is_last_child else "├─"
                 yield from _tree_lines(
                     child,
-                    prefix="",
-                    is_last=is_last_child,
+                    prefix=" " * indent,
+                    is_last=(i == last_idx),
                     show_root=False,
+                    indent=indent,
                 )
         else:
             yield ("", node)
         return
 
     connector = "└─ " if is_last else "├─ "
-    # “parent closed” means this node’s children should use a blank gutter
-    # below this prefix when we recurse.
     yield (prefix + connector, node)
 
     if node.children and node.expanded:
+        # "parent closed" → blank gutter under this node; otherwise keep
+        # the vertical bar. The 3-char width of the extension already
+        # aligns with the connector, so we don't add another `indent`
+        # here — that would push descendants two extra spaces off.
         extension = "   " if is_last else "│  "
         last_idx = len(node.children) - 1
         for i, child in enumerate(node.children):
@@ -114,6 +119,7 @@ def _tree_lines(node, prefix="", is_last=True, show_root=True):
                 prefix=prefix + extension,
                 is_last=(i == last_idx),
                 show_root=False,
+                indent=indent,
             )
 
 
@@ -349,6 +355,27 @@ def render_interactive(findings, stream=None, tree_root=None):
             parent = os.path.dirname(parent)
         return False
 
+    def _compute_row_prefixes():
+        """Return a list of prefix strings (one per visible row) that
+        include both the per-level indent and the connector (`├─` /
+        `└─`). The TUI prepends the prefix + a `[ ]` checkbox to each
+        row, mirroring `tree(1)` and giving the user a clear visual
+        sense of where each item sits in the directory tree.
+        """
+        if not has_tree:
+            return [""] * len(visible_nodes)
+        # Reuse _tree_lines: it walks the same tree with the same
+        # expand/collapse state and yields (prefix, node). The first
+        # entry is the root, which visible_nodes also drops, so zip
+        # the rest 1:1.
+        prefixes = [prefix for prefix, _ in _tree_lines(tree_root, show_root=True)][1:]
+        if len(prefixes) != len(visible_nodes):
+            # Shouldn't happen — both come from the same tree walk —
+            # but pad/truncate defensively so a mismatch can't crash
+            # the TUI.
+            prefixes = (prefixes + [" " * TREE_INDENT] * len(visible_nodes))[:len(visible_nodes)]
+        return prefixes
+
     def _topmost_selected(sel):
         """Return the subset of `sel` whose paths are not descendants of
         another selected path. When the user selects both a parent and a
@@ -419,13 +446,18 @@ def render_interactive(findings, stream=None, tree_root=None):
             ("PATH",     60, lambda n: n.path),
         ]
         col_sep = 2
-        total_width = sum(c[1] for c in scroll_columns) + col_sep * (len(scroll_columns) - 1)
+        # The TUI prefix column: `[ ] ` (4 chars including the trailing
+        # space) plus a worst-case tree prefix (deepest tree we ever
+        # render is bounded by --max-depth pass 2 = 4 levels deep;
+        # 4 * 4 chars/level = 16). Budget 24 chars to leave headroom.
+        prefix_col_width = (4 if has_tree else 3) + (16 if has_tree else 0)
+        total_width = prefix_col_width + sum(c[1] for c in scroll_columns) + col_sep * len(scroll_columns)
 
         selected = set()
         cursor = 0
         x_offset = 0
 
-        def make_row(idx, width):
+        def make_row(idx, prefix, width):
             node = visible_nodes[idx]
             finding = node.finding if hasattr(node, "finding") else None
             if finding:
@@ -433,7 +465,10 @@ def render_interactive(findings, stream=None, tree_root=None):
             else:
                 action = analyze.ACTION_KEEP_ACTIVE
             mark = "[o]" if idx in selected else "[ ]"
-            parts = [mark]
+            # The tree-line prefix puts the checkbox in the leftmost
+            # column and the connector next to it, e.g. `[ ]  ├─ foo`.
+            tree_prefix = f"{mark} {prefix}"
+            parts = [tree_prefix]
             for name, w, getter in scroll_columns:
                 val = str(getter(node))
                 if len(val) > w:
@@ -553,6 +588,12 @@ def render_interactive(findings, stream=None, tree_root=None):
             first = page * visible
             last = min(first + visible, len(visible_nodes))
 
+            # Compute the tree-line prefix for each visible row in the
+            # current page. _compute_row_prefixes() returns a list the
+            # same length as visible_nodes; we slice to the page.
+            all_prefixes = _compute_row_prefixes()
+            page_prefixes = all_prefixes[first:last]
+
             n_sel = len(selected)
             sel_kb = total_selected_kb(selected)
             sel_text = (
@@ -577,7 +618,7 @@ def render_interactive(findings, stream=None, tree_root=None):
                 if y >= body_bot:
                     break
                 node = visible_nodes[idx]
-                row = make_row(idx, max_x)
+                row = make_row(idx, page_prefixes[i], max_x)
                 view = row[x_offset: x_offset + max_x]
                 view = view.ljust(max_x)[:max_x]
                 finding = getattr(node, "finding", None)

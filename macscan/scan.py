@@ -190,7 +190,11 @@ def _build_tree(items, root):
     for p in sorted(nodes, key=lambda p: p.count(os.sep)):
         node = nodes[p]
         parent_p = os.path.dirname(p)
-        while parent_p and parent_p != root:
+        # `os.path.dirname("/") == "/"` on POSIX, so `while parent_p and
+        # parent_p != root` would loop forever once we reach the filesystem
+        # root. Also stop when dirname stops changing.
+        while (parent_p and parent_p != root
+               and parent_p != os.path.dirname(parent_p)):
             if parent_p in nodes:
                 nodes[parent_p].children.append(node)
                 break

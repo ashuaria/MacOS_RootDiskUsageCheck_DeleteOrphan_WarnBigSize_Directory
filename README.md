@@ -71,11 +71,14 @@ Four formats:
   table horizontally (use this to read the full path or `REASON` column);
   Space toggles selection; the bottom bar shows the running total size of
   selected items; `a` selects all, `n` clears the selection, Page Up/Down and
-  Home/End jump; `q` or ESC quits. By default the TUI is read-only — selecting
-  items does not delete anything, it just lets you sum up what you'd recover.
-  `Ctrl+D` opens a confirm dialog (you must type the literal word `delete` and
-  press Enter) that removes the selected items from disk. ESC at any point
-  cancels; this is the only path in macscan that mutates the filesystem.
+  Home/End jump; `q` or ESC quits. Each row is prefixed with a tree-line
+  connector (`├─` / `└─` / `│`) attached to the checkbox, so you can see at a
+  glance where each item sits in the directory tree. By default the TUI is
+  read-only — selecting items does not delete anything, it just lets you sum
+  up what you'd recover. `Ctrl+D` opens a confirm dialog (you must type the
+  literal word `delete` and press Enter) that removes the selected items from
+  disk. ESC at any point cancels; this is the only path in macscan that
+  mutates the filesystem.
 - **JSON** (`--json PATH`) — one object per finding, fields: `path, size_kb,
   size_human, category, what, owner, action, reason, is_orphan`.
 - **HTML** (`--html PATH`) — single self-contained file, sortable columns
